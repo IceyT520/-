@@ -1,0 +1,50 @@
+[
+  {
+    "question": "Li3YCl6的室温离子电导率是多少?",
+    "expected_sources": ["Asano_2018", "Schlem_2021", "Li_Du_2025"]
+  },
+  {
+    "question": "Li3YBr6和Li3YCl6相比, 离子电导率哪个更高?",
+    "expected_sources": ["Asano_2018", "Schlem_2021", "Li_Du_2025"]
+  },
+  {
+    "question": "氟化物固态电解质的电化学窗口和离子电导率各有什么特点?",
+    "expected_sources": ["Li_Du_2025", "Wang_2022_SciAdv"]
+  },
+  {
+    "question": "Li3Ta3O4Cl10氧卤化物的室温离子电导率达到多少?",
+    "expected_sources": ["Zhao_Sun_2025"]
+  },
+  {
+    "question": "LiTaOCl4的离子电导率是多少?",
+    "expected_sources": ["Tanaka_2023", "Li_Du_2025"]
+  },
+  {
+    "question": "非晶氯化物固态电解质的离子电导率可以达到多少?",
+    "expected_sources": ["Li_2023_JACS_AmorphousChloride", "Li_Du_2025"]
+  },
+  {
+    "question": "Li3HoBr6是如何合成的? 其离子电导率是多少?",
+    "expected_sources": ["Shi_2021", "Li_Du_2025"]
+  },
+  {
+    "question": "机械化学合成法如何影响Li3MCl6电解质的离子电导率?",
+    "expected_sources": ["Schlem_2020", "Yang_2024"]
+  },
+  {
+    "question": "卤化物电解质与高电压正极的界面稳定性存在什么问题?",
+    "expected_sources": ["Kim_2023", "Song_2024", "Li_Du_2025"]
+  },
+  {
+    "question": "UCl3型结构的卤化物电解质与Li3MCl6型在结构上有什么本质区别?",
+    "expected_sources": ["Luo_2024", "Li_Du_2025"]
+  },
+  {
+    "question": "混合卤素或氟掺杂策略如何提升卤化物电解质的性能?",
+    "expected_sources": ["Gao_2024", "Li_Du_2025"]
+  },
+  {
+    "question": "多阳离子混合氯化物电解质的离子电导率有什么规律?",
+    "expected_sources": ["Li_2023_Angew_MultiCation", "Liang_2022"]
+  }
+]

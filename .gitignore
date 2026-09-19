@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# 环境与密钥
+.env
+
+# 数据(体积大,不入库;文献PDF版权原因也不入库)
+data/chroma_db/
+pdfs/*.pdf
+
+# 系统
+Thumbs.db
+.DS_Store
+
+# 申报书含个人信息, 不入库
+大创申报书v1.doc

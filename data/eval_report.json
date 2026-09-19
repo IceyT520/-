@@ -20,9 +20,9 @@
       "question": "Li3YBr6和Li3YCl6相比, 离子电导率哪个更高?",
       "recall_hit": true,
       "retrieved": [
+        "curated/review_table1_性能数据汇总.txt",
         "Li_Du_2025_ACSNano_HalideSSE_Review.pdf",
-        "Shi_2021_NanoLett_Li3HoBr6.pdf",
-        "Schlem_2021_ChemMater_Li3YCl6.pdf"
+        "Shi_2021_NanoLett_Li3HoBr6.pdf"
       ],
       "expected": [
         "Asano_2018",
@@ -34,8 +34,8 @@
       "question": "氟化物固态电解质的电化学窗口和离子电导率各有什么特点?",
       "recall_hit": true,
       "retrieved": [
-        "Li_Du_2025_ACSNano_HalideSSE_Review.pdf",
-        "Li_2023_Angew_MultiCationChloride.pdf",
+        "curated/review_table1_性能数据汇总.txt",
+        "curated/review_table1_性能数据汇总.txt",
         "Li_Du_2025_ACSNano_HalideSSE_Review.pdf"
       ],
       "expected": [
@@ -59,9 +59,9 @@
       "question": "LiTaOCl4的离子电导率是多少?",
       "recall_hit": true,
       "retrieved": [
-        "Li_Du_2025_ACSNano_HalideSSE_Review.pdf",
-        "Li_Du_2025_ACSNano_HalideSSE_Review.pdf",
-        "Tanaka_2023_Angew_Oxyhalide.pdf"
+        "curated/review_table1_性能数据汇总.txt",
+        "curated/review_table1_性能数据汇总.txt",
+        "Li_Du_2025_ACSNano_HalideSSE_Review.pdf"
       ],
       "expected": [
         "Tanaka_2023",
@@ -72,9 +72,9 @@
       "question": "非晶氯化物固态电解质的离子电导率可以达到多少?",
       "recall_hit": true,
       "retrieved": [
+        "curated/review_table1_性能数据汇总.txt",
         "Li_2023_JACS_AmorphousChloride.pdf",
-        "Tanaka_2023_Angew_Oxyhalide.pdf",
-        "Li_2023_JACS_AmorphousChloride.pdf"
+        "curated/review_table1_性能数据汇总.txt"
       ],
       "expected": [
         "Li_2023_JACS_AmorphousChloride",

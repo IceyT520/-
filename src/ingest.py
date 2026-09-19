@@ -177,6 +177,25 @@ def main() -> None:
             total_chunks += len(chunks)
             print(f"{pdf.name}: {len(pages)} 页 -> {len(chunks)} 块")
 
+        # 人工整理的结构化文档(如综述表格), 弥补双栏PDF表格抽取错乱的问题
+        curated_dir = PROJECT_ROOT / "data" / "curated"
+        for txt in sorted(curated_dir.glob("*.txt")):
+            text = normalize_formulas(
+                txt.read_text(encoding="utf-8").translate(_ODD_SPACES)
+            )
+            title = text.splitlines()[0][:80]
+            chunks = splitter.split_text(text)
+            for i, chunk in enumerate(chunks):
+                record = {
+                    "id": f"curated-{txt.stem}#{i}",
+                    "text": chunk,
+                    "source": f"curated/{txt.name}",
+                    "title": title,
+                }
+                out.write(json.dumps(record, ensure_ascii=False) + "\n")
+            total_chunks += len(chunks)
+            print(f"curated/{txt.name}: -> {len(chunks)} 块")
+
     print(f"\n共处理 {len(pdfs)} 篇文献, 生成 {total_chunks} 个文本块 -> {out_path}")
 
 

@@ -135,26 +135,33 @@ class RAGEngine:
         parts.append(f"\n问题: {query}")
         return "\n".join(parts)
 
+    def _llm_client(self):
+        if not hasattr(self, "_client"):
+            load_dotenv(PROJECT_ROOT / ".env")
+            api_key = os.environ.get("DEEPSEEK_API_KEY")
+            if not api_key:
+                raise SystemExit("未找到 DEEPSEEK_API_KEY, 请在 .env 中配置")
+            from openai import OpenAI
+
+            self._client = OpenAI(
+                api_key=api_key, base_url="https://api.deepseek.com"
+            )
+        return self._client
+
+    def _messages(self, query: str, hits: list[dict]) -> list[dict]:
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": self.build_prompt(query, hits)},
+        ]
+
     def ask(self, query: str) -> dict:
         hits = self.retrieve(query)
-        prompt = self.build_prompt(query, hits)
-
-        load_dotenv(PROJECT_ROOT / ".env")
-        api_key = os.environ.get("DEEPSEEK_API_KEY")
-        if not api_key:
-            raise SystemExit("未找到 DEEPSEEK_API_KEY, 请在 .env 中配置")
-
-        from openai import OpenAI
-
-        client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+        client = self._llm_client()
         t0 = time.time()
         resp = client.chat.completions.create(
             model="deepseek-chat",
             temperature=0.2,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
+            messages=self._messages(query, hits),
         )
         elapsed = time.time() - t0
         answer = resp.choices[0].message.content
@@ -167,6 +174,26 @@ class RAGEngine:
             ],
             "elapsed_s": round(elapsed, 1),
         }
+
+    def ask_stream(self, query: str):
+        """流式生成, 供网页界面使用。逐段产出答案文本, 最后产出耗时标记。"""
+        hits = self.retrieve(query)
+        client = self._llm_client()
+        t0 = time.time()
+        stream = client.chat.completions.create(
+            model="deepseek-chat",
+            temperature=0.2,
+            messages=self._messages(query, hits),
+            stream=True,
+        )
+        partial = ""
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content or ""
+            if delta:
+                partial += delta
+                yield partial
+        elapsed = time.time() - t0
+        yield f"{partial}\n\n---\n生成耗时 {elapsed:.1f}s | 引用来源见上方参考文献列表"
 
 
 def main() -> None:

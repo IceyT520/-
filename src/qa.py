@@ -16,6 +16,10 @@ import time
 from pathlib import Path
 
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# 嵌入模型已缓存时离线加载, 避免启动时向 huggingface.co 发送检查请求的长重试
+if (Path.home() / ".cache" / "huggingface" / "hub"
+        / "models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2").exists():
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 from dotenv import load_dotenv  # noqa: E402
 
@@ -79,6 +83,32 @@ class RAGEngine:
         client = chromadb.PersistentClient(path=str(db_path))
         self.collection = client.get_collection(COLLECTION_NAME)
         self.top_k = top_k
+
+    def add_documents(self, records: list[dict], batch_size: int = 64) -> None:
+        """把新文本块嵌入并写入向量库(与 build_db 一致的标题拼接策略)。"""
+        for start in range(0, len(records), batch_size):
+            batch = records[start : start + batch_size]
+            embeddings = self.model.encode(
+                [f"{r['title']}\n{r['text']}" for r in batch],
+                show_progress_bar=False,
+                normalize_embeddings=True,
+            )
+            self.collection.add(
+                ids=[r["id"] for r in batch],
+                embeddings=embeddings.tolist(),
+                documents=[r["text"] for r in batch],
+                metadatas=[
+                    {"source": r["source"], "title": r["title"],
+                     "lib": r.get("lib", "core")}
+                    for r in batch
+                ],
+            )
+
+    def count_chunks(self, lib: str | None = None) -> int:
+        """文本块总数; lib="user" 时只统计用户上传部分。"""
+        if lib is None:
+            return self.collection.count()
+        return len(self.collection.get(where={"lib": lib}, include=[])["ids"])
 
     def _vector_rank(self, q_emb: list, n: int, where_document=None) -> list[dict]:
         kwargs = dict(

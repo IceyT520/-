@@ -27,6 +27,11 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter  # noqa: E40
 
 SHARE_LAN = os.environ.get("HSSE_SHARE_LAN", "0") == "1"
 PORT = int(os.environ.get("HSSE_PORT", "7860"))
+# 公网部署保护: 设置 HSSE_ACCESS_PASSWORD 后访问网页需登录(用户名默认 hsse);
+# 设置 HSSE_UPLOAD_PASSWORD 后上传文献需单独口令(不设置则上传免费开放)
+ACCESS_PASSWORD = os.environ.get("HSSE_ACCESS_PASSWORD", "")
+ACCESS_USER = os.environ.get("HSSE_ACCESS_USER", "hsse")
+UPLOAD_PASSWORD = os.environ.get("HSSE_UPLOAD_PASSWORD", "")
 
 engine = RAGEngine(top_k=4)
 splitter = RecursiveCharacterTextSplitter(
@@ -104,7 +109,10 @@ def refresh_library():
 
 # ---------- 上传 ----------
 
-def upload_pdf(file, progress=gr.Progress()):
+def upload_pdf(file, upload_pwd, progress=gr.Progress()):
+    if UPLOAD_PASSWORD and upload_pwd != UPLOAD_PASSWORD:
+        yield "⚠️ 上传口令错误, 请向管理员索取", *refresh_library()
+        return
     if file is None:
         yield "⚠️ 请先选择 PDF 文件", *refresh_library()
         return
@@ -179,6 +187,13 @@ with gr.Blocks(title="卤化物固态电解质问答系统", theme=theme, css=CS
             gr.Markdown("### 📤 上传我的文献 (PDF)")
             gr.Markdown("上传后自动抽取、分块、入库, 立即可被检索。", elem_classes=["hint"])
             file_input = gr.File(file_types=[".pdf"], label="选择PDF", type="filepath")
+            if UPLOAD_PASSWORD:
+                upload_pwd = gr.Textbox(
+                    label="上传口令", type="password",
+                    placeholder="此服务已开启上传保护, 请输入口令",
+                )
+            else:
+                upload_pwd = gr.State("")
             upload_btn = gr.Button("上传到文献库", variant="secondary")
             upload_status = gr.Markdown()
             with gr.Accordion("🗂 我上传的文献", open=True):
@@ -192,7 +207,7 @@ with gr.Blocks(title="卤化物固态电解质问答系统", theme=theme, css=CS
     send_btn.click(respond, [msg, chatbot], [msg, chatbot])
     msg.submit(respond, [msg, chatbot], [msg, chatbot])
     upload_btn.click(
-        upload_pdf, file_input,
+        upload_pdf, [file_input, upload_pwd],
         [upload_status, stats_md, core_df, uploads_df],
     )
     refresh_btn.click(refresh_library, None, [stats_md, core_df, uploads_df])
@@ -200,6 +215,9 @@ with gr.Blocks(title="卤化物固态电解质问答系统", theme=theme, css=CS
 
 if __name__ == "__main__":
     server = "0.0.0.0" if SHARE_LAN else "127.0.0.1"
+    auth = (ACCESS_USER, ACCESS_PASSWORD) if ACCESS_PASSWORD else None
     print(f"启动网页服务: http://{server}:{PORT}"
           + (" (局域网模式, 同学可通过你的IP访问)" if SHARE_LAN else " (本地模式)"))
-    demo.launch(server_name=server, server_port=PORT)
+    if auth:
+        print(f"访问口令已开启: 用户名 {ACCESS_USER}")
+    demo.launch(server_name=server, server_port=PORT, auth=auth)

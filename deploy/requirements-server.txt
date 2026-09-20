@@ -1,0 +1,9 @@
+# 服务器端最小依赖(不锁版本, 由pip按服务器Python版本自动解析)
+# 网页端 app.py 不需要 jupyter/ipywidgets, 故不含
+pymupdf
+langchain-text-splitters
+sentence-transformers
+chromadb
+openai
+python-dotenv
+gradio

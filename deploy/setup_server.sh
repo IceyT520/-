@@ -13,7 +13,11 @@ sudo apt-get install -y python3 python3-venv python3-pip
 echo "== 2/6 创建虚拟环境并安装Python依赖(约5-10分钟) =="
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip -q -i https://pypi.tuna.tsinghua.edu.cn/simple
-.venv/bin/pip install -q -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 先装CPU版torch(避免Linux默认PyPI torch附带数GB的CUDA包)
+.venv/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cpu \
+  || .venv/bin/pip install -q torch -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 服务器用最小依赖集(不锁版本), 避免与本机冻结版本的Python版本冲突
+.venv/bin/pip install -q -r deploy/requirements-server.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 echo "== 3/6 检查 .env 配置 =="
 if [ ! -f .env ]; then

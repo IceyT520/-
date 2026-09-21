@@ -499,62 +499,70 @@ with gr.Blocks(title="卤化物固态电解质问答系统") as demo:
                     gr.Examples(EXAMPLES, msg, label="示例问题 (点击填入)")
                     with gr.Accordion("📎 本回答依据的文献片段 (点击展开核验)", open=False):
                         chunks_md = gr.Markdown("*提问后此处显示答案所依据的原文片段*")
-                    with gr.Row():
-                        cite_fmt = gr.Dropdown(
-                            choices=[("GB/T 7714 (国标)", "gbt7714"), ("BibTeX", "bibtex")],
-                            value="gbt7714", label="参考文献导出格式", scale=2,
-                        )
-                        cite_btn = gr.Button("📋 导出本回答的参考文献", scale=2)
-                    cite_out = gr.Textbox(label="参考文献 (可直接复制)", lines=4, visible=False)
-                    with gr.Row():
-                        dl_btn = gr.Button("⬇️ 下载本次问答记录 (Markdown)", scale=2)
-                    dl_file = gr.File(label="问答记录文件", visible=False, interactive=False)
+                    with gr.Accordion("📤 导出与下载", open=False):
+                        with gr.Row():
+                            cite_fmt = gr.Dropdown(
+                                choices=[("GB/T 7714 (国标)", "gbt7714"), ("BibTeX", "bibtex")],
+                                value="gbt7714", label="参考文献格式", scale=2, show_label=False,
+                            )
+                            cite_btn = gr.Button("📋 导出参考文献", scale=2)
+                            dl_btn = gr.Button("⬇️ 下载问答记录", scale=2)
+                        cite_out = gr.Textbox(label="参考文献 (可直接复制)", lines=4, visible=False)
+                        dl_file = gr.File(label="问答记录文件", visible=False, interactive=False)
 
-                # 右侧: 文献库 + 上传
+                # 右侧: 三个子标签页收纳
                 with gr.Column(scale=2):
-                    stats_md = gr.Markdown(elem_classes=["stats-box"])
-                    with gr.Accordion("📖 查看核心文献库清单", open=False):
-                        core_df = gr.Dataframe(
-                            headers=["标题", "文件"], col_count=2,
-                            interactive=False, wrap=True,
-                        )
-                    gr.Markdown("### 📤 上传我的文献 (PDF)")
-                    gr.Markdown("上传后自动抽取、分块、入库, 立即可被检索。", elem_classes=["hint"])
-                    file_input = gr.File(file_types=[".pdf"], label="选择PDF", type="filepath")
-                    if UPLOAD_PASSWORD:
-                        upload_pwd = gr.Textbox(
-                            label="上传口令", type="password",
-                            placeholder="此服务已开启上传保护, 请输入口令",
-                        )
-                    else:
-                        upload_pwd = gr.State("")
-                    upload_btn = gr.Button("上传到文献库", variant="secondary")
-                    upload_status = gr.Markdown()
-                    with gr.Accordion("🗂 我上传的文献", open=True):
-                        uploads_df = gr.Dataframe(
-                            headers=["标题", "文件名", "块数", "上传时间"], col_count=4,
-                            interactive=False, wrap=True,
-                        )
-                    refresh_btn = gr.Button("🔄 刷新文献库", size="sm")
-                    with gr.Accordion("🌱 待确认数据 (新论文自动抽取)", open=True):
-                        pending_df = gr.Dataframe(
-                            headers=["性能数据行", "来源文件", "抽取时间"], col_count=3,
-                            interactive=False, wrap=True,
-                        )
-                        with gr.Row():
-                            confirm_btn = gr.Button("✅ 确认入库", variant="primary", size="sm")
-                            clear_btn = gr.Button("🗑 清空", size="sm")
-                        pending_status = gr.Markdown()
-                    with gr.Accordion("📰 新文献追踪 (arXiv 每周自动更新)", open=False):
-                        arxiv_df = gr.Dataframe(
-                            headers=["日期", "标题", "arXiv ID"], col_count=3,
-                            interactive=False, wrap=True,
-                        )
-                        arxiv_label = gr.Markdown()
-                        with gr.Row():
-                            arxiv_refresh_btn = gr.Button("🔄 立即刷新", size="sm")
-                            arxiv_ingest_btn = gr.Button("⬇️ 全部下载入库", variant="secondary", size="sm")
-                        arxiv_status = gr.Markdown()
+                    with gr.Tabs():
+                        with gr.Tab("📚 文献库"):
+                            stats_md = gr.Markdown(elem_classes=["stats-box"])
+                            with gr.Accordion("📖 核心文献库清单", open=False):
+                                core_df = gr.Dataframe(
+                                    headers=["标题", "文件"], col_count=2,
+                                    interactive=False, wrap=True,
+                                )
+                            with gr.Accordion("🗂 用户上传的文献", open=True):
+                                uploads_df = gr.Dataframe(
+                                    headers=["标题", "文件名", "块数", "上传时间"], col_count=4,
+                                    interactive=False, wrap=True,
+                                )
+                            refresh_btn = gr.Button("🔄 刷新文献库", size="sm")
+
+                        with gr.Tab("📤 上传"):
+                            gr.Markdown("上传 PDF 后自动抽取、分块、入库, 立即可被检索。")
+                            file_input = gr.File(file_types=[".pdf"], label="选择PDF", type="filepath")
+                            if UPLOAD_PASSWORD:
+                                upload_pwd = gr.Textbox(
+                                    label="上传口令", type="password",
+                                    placeholder="此服务已开启上传保护, 请输入口令",
+                                )
+                            else:
+                                upload_pwd = gr.State("")
+                            upload_btn = gr.Button("上传到文献库", variant="primary")
+                            upload_status = gr.Markdown()
+                            gr.Markdown(
+                                "---\n**🌱 待确认数据**：上传新论文后 AI 自动抽取的"
+                                "材料性能数据会出现在这里, 核对后确认入库。"
+                            )
+                            pending_df = gr.Dataframe(
+                                headers=["性能数据行", "来源文件", "抽取时间"], col_count=3,
+                                interactive=False, wrap=True, label="待确认数据",
+                            )
+                            with gr.Row():
+                                confirm_btn = gr.Button("✅ 确认入库", variant="primary", size="sm")
+                                clear_btn = gr.Button("🗑 清空", size="sm")
+                            pending_status = gr.Markdown()
+
+                        with gr.Tab("📰 新文献"):
+                            gr.Markdown("每周自动检索 arXiv 卤化物电解质最新论文。")
+                            arxiv_df = gr.Dataframe(
+                                headers=["日期", "标题", "arXiv ID"], col_count=3,
+                                interactive=False, wrap=True,
+                            )
+                            arxiv_label = gr.Markdown()
+                            with gr.Row():
+                                arxiv_refresh_btn = gr.Button("🔄 立即刷新", size="sm")
+                                arxiv_ingest_btn = gr.Button("⬇️ 全部下载入库", variant="secondary", size="sm")
+                            arxiv_status = gr.Markdown()
 
         with gr.Tab("🏆 性能排行"):
             gr.Markdown("核心性能数据表收录材料的室温离子电导率排行 (数据: 人工校准性能表)")

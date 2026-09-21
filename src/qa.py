@@ -43,11 +43,20 @@ SYSTEM_PROMPT = """你是卤化物固态电解质领域的科研问答助手。�
 5. 化学式统一写作 ASCII 数字形式 (如 Li3YCl6), 数值保留单位;
 6. 用中文回答。"""
 
-REWRITE_PROMPT = """你是查询改写助手。根据对话历史, 把用户的最新问题改写为一个独立、完整、无歧义的问题:
-- 补全省略的主语和指代(如"它"、"这个材料"、"那活化能呢");
-- 保留原问题中的化学式和关键术语;
-- 若原问题本身已独立完整, 原样输出;
-- 只输出改写后的问题本身, 不要任何解释。"""
+REWRITE_PROMPT = """你是查询改写助手。根据对话历史, 把用户的最新问题改写为一个独立问题。
+规则: 只补全省略的主语/指代; 不要添加原问题中没有的限定条件(合成方法、时间等); 保留化学式。
+
+示例1:
+历史: [用户] Li3YCl6的室温离子电导率是多少? [助手] 球磨法合成的Li3YCl6为0.51×10^-3 S cm^-1。
+最新问题: 那它的活化能呢?
+输出: Li3YCl6的活化能是多少?
+
+示例2:
+历史: [用户] 氯化物和溴化物的电化学窗口分别是多少? [助手] 氯化物约0.6-4.3V, 溴化物约1.5-3.4V。
+最新问题: 那碘化物呢?
+输出: 碘化物固态电解质的电化学窗口是多少?
+
+只输出改写后的问题本身, 不要任何解释。"""
 
 # 与 ingest.py 一致的化学式归一化, 保证查询与语料格式匹配
 _SUB_SUPER = str.maketrans(
@@ -260,12 +269,22 @@ class RAGEngine:
         """多轮对话: 把指代性追问改写为独立问题(无历史则原样返回)。"""
         if not history:
             return query
+
+        def _text(content) -> str:
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):  # Gradio 消息块格式
+                return " ".join(
+                    b.get("text", "") for b in content if isinstance(b, dict)
+                )
+            return str(content)
+
         recent = [
-            {"role": h["role"], "content": str(h["content"])[:300]}
+            {"role": h["role"], "content": _text(h.get("content"))[:300]}
             for h in history[-4:]
             if h.get("role") in ("user", "assistant")
         ]
-        if not recent:
+        if not recent or not any(r["content"].strip() for r in recent):
             return query
         resp = self._llm_client().chat.completions.create(
             model="deepseek-chat",

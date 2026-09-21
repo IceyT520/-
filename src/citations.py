@@ -6,7 +6,9 @@
 """
 
 import csv
+import html
 import json
+import re
 import time
 import urllib.request
 from pathlib import Path
@@ -74,6 +76,20 @@ def _fetch_crossref(doi: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))["message"]
 
 
+def _clean_meta_text(s: str) -> str:
+    """清理 Crossref 元数据文本: 去除 <sub>/<sup>/<i>/<inf> 等排版标签并反转义实体。
+    开始标签连同其前导空白删除(使 'Li <sub>3</sub>' 合为 'Li3'),
+    闭合标签只删标签本身; 再合并标签在化学式中留下的断口('Li3 YCl6' -> 'Li3YCl6')。"""
+    s = re.sub(r"\s*<[^>]+>", "", s)
+    s = re.sub(r"</[^>]+>", "", s)
+    s = html.unescape(s)
+    s = re.sub(r"\s+", " ", s).strip()
+    # 数字与后续元素符号之间的空格是标签断口, 合并('Li3 YCl6' -> 'Li3YCl6');
+    # 后接小写开头单词(如 and)的不受影响
+    s = re.sub(r"(?<=\d)\s+(?=[A-Z][a-z]?)", "", s)
+    return s
+
+
 def _format_gbt7714(meta: dict) -> str:
     """GB/T 7714-2015 期刊论文: 主要责任者. 题名[J]. 刊名, 年, 卷(期): 页码."""
     authors = []
@@ -85,8 +101,8 @@ def _format_gbt7714(meta: dict) -> str:
         authors.append("等")
     author_str = ", ".join(authors) or "佚名"
 
-    title = (meta.get("title") or [""])[0]
-    journal = (meta.get("container-title") or [""])[0]
+    title = _clean_meta_text((meta.get("title") or [""])[0])
+    journal = _clean_meta_text((meta.get("container-title") or [""])[0])
     year = (meta.get("issued", {}).get("date-parts") or [[None]])[0][0] or ""
     volume = meta.get("volume", "")
     issue = meta.get("issue", "")

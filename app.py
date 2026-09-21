@@ -513,7 +513,9 @@ with gr.Blocks(title="卤化物固态电解质问答系统") as demo:
                             )
                             cite_btn = gr.Button("📋 导出参考文献", scale=2)
                             dl_btn = gr.Button("⬇️ 下载问答记录", scale=2)
-                        cite_out = gr.Textbox(label="参考文献 (可直接复制)", lines=4, visible=False)
+                        cite_out = gr.Textbox(
+                            label="参考文献 (全选复制)", lines=8, visible=False,
+                        )
                         dl_file = gr.File(label="问答记录文件", visible=False, interactive=False)
 
                 # 右侧: 三个子标签页收纳

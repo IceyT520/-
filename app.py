@@ -30,6 +30,7 @@ from auto_extract import (  # noqa: E402
     load_pending, save_pending,
 )
 from arxiv_watch import fetch as arxiv_fetch, load_entries as arxiv_load  # noqa: E402
+from textfmt import prettify  # noqa: E402
 
 import gradio as gr  # noqa: E402
 from langchain_text_splitters import RecursiveCharacterTextSplitter  # noqa: E402
@@ -70,7 +71,7 @@ def format_hits(hits: list | None) -> str:
         parts.append(
             f"**[{i}]** 《{h['title']}》  \n"
             f"来源: `{h['source']}`{page} | 相关度: {h['similarity']:.2f}\n\n"
-            f"> {text}\n"
+            f"> {prettify(text)}\n"
         )
     return "\n---\n".join(parts)
 
@@ -86,7 +87,7 @@ def respond(message: str, history: list):
     ]
     try:
         for partial in engine.ask_stream(message, history=past_turns):
-            history[-1]["content"] = partial
+            history[-1]["content"] = prettify(partial)
             yield "", history, "🔍 检索与生成中……"
         engine.last_question = {"question": message, "answer": history[-1]["content"]}
         yield "", history, format_hits(getattr(engine, "last_hits", None))
@@ -151,12 +152,12 @@ def leaderboard(category_label: str):
 
     df = pd.DataFrame(
         {
-            "材料": [m["formula"] + (f"（{m['note']}）" if m["note"] else "") for m in top],
+            "材料": [prettify(m["formula"] + (f"（{m['note']}）" if m["note"] else "")) for m in top],
             "室温离子电导率 (mS cm⁻¹)": [m["ionic_val"] for m in top],
         }
     )
     table = [
-        [m["formula"], m["ionic"], m["ea"], m["electronic"], m["esw"]]
+        [prettify(m["formula"]), m["ionic"], m["ea"], prettify(m["electronic"]), m["esw"]]
         for m in top
     ]
     return df, table
@@ -580,7 +581,7 @@ with gr.Blocks(title="卤化物固态电解质问答系统") as demo:
             )
 
         with gr.Tab("📘 使用指南"):
-            gr.Markdown(GUIDE_MD)
+            gr.Markdown(prettify(GUIDE_MD))
 
     # 事件
     send_btn.click(respond, [msg, chatbot], [msg, chatbot, chunks_md])

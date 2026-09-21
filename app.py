@@ -61,19 +61,21 @@ EXAMPLES = [
 # ---------- 聊天 ----------
 
 def format_hits(hits: list | None) -> str:
-    """把检索到的文献片段渲染为可核验的 Markdown。"""
+    """把检索到的文献片段渲染为纯文本(不用Markdown, 防止原文中的 | # < 等字符破坏渲染)。"""
+    if hits is None:
+        return "提问后此处显示答案所依据的原文片段"
     if not hits:
-        return "*暂无*"
+        return "本回答由化学感知查询直接生成(数据来自人工校准性能表), 未引用文献片段。"
     parts = []
     for i, h in enumerate(hits, 1):
-        text = h["text"][:350] + ("……" if len(h["text"]) > 350 else "")
+        text = h["text"][:400] + ("……" if len(h["text"]) > 400 else "")
         page = f" | 第 {h['page']} 页" if h.get("page") else ""
         parts.append(
-            f"**[{i}]** 《{h['title']}》  \n"
-            f"来源: `{h['source']}`{page} | 相关度: {h['similarity']:.2f}\n\n"
-            f"> {prettify(text)}\n"
+            f"[{i}] 《{h['title']}》\n"
+            f"来源: {h['source']}{page} | 相关度: {h['similarity']:.2f}\n"
+            f"{'-' * 40}\n{prettify(text)}"
         )
-    return "\n---\n".join(parts)
+    return "\n\n".join(parts)
 
 
 def respond(message: str, history: list):
@@ -499,7 +501,10 @@ with gr.Blocks(title="卤化物固态电解质问答系统") as demo:
                         send_btn = gr.Button("提问", variant="primary", scale=1)
                     gr.Examples(EXAMPLES, msg, label="示例问题 (点击填入)")
                     with gr.Accordion("📎 本回答依据的文献片段 (点击展开核验)", open=False):
-                        chunks_md = gr.Markdown("*提问后此处显示答案所依据的原文片段*")
+                        chunks_md = gr.Textbox(
+                            value="提问后此处显示答案所依据的原文片段",
+                            lines=12, interactive=False, show_label=False,
+                        )
                     with gr.Accordion("📤 导出与下载", open=False):
                         with gr.Row():
                             cite_fmt = gr.Dropdown(

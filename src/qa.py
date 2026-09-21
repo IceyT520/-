@@ -39,7 +39,7 @@ SYSTEM_PROMPT = """你是卤化物固态电解质领域的科研问答助手。�
 1. 仅依据提供的文献片段回答, 不得使用片段之外的知识;
 2. 若片段中没有回答问题所需的信息, 请明确说明"未在文献中找到该数据", 不得编造数值或结论;
 3. 答案中每个论断后用 [编号] 标注其来源片段, 如 [1]、[2];
-4. 答案末尾列出参考文献列表, 格式: [编号] 论文标题;
+4. 答案末尾列出参考文献列表, 格式: [编号] 论文标题; 同一篇文献即使有多个片段也只列一次(用其首次出现的编号);
 5. 化学式统一写作 ASCII 数字形式 (如 Li3YCl6), 数值保留单位;
 6. 用中文回答。"""
 
@@ -250,6 +250,45 @@ class RAGEngine:
         parts.append(f"\n问题: {query}")
         return "\n".join(parts)
 
+    @staticmethod
+    def _dedupe_answer_refs(answer: str, hits: list[dict]) -> str:
+        """同一文献的多个片段在参考文献列表中只保留一次,
+        正文中的引用编号同步合并到该文献首次出现的编号。"""
+        first_of_source: dict[str, int] = {}
+        remap: dict[int, int] = {}
+        for i, h in enumerate(hits, 1):
+            src = h["source"]
+            if src in first_of_source:
+                remap[i] = first_of_source[src]
+            else:
+                first_of_source[src] = i
+        if not remap:
+            return answer
+        # 分离正文与末尾的参考文献列表(兼容"参考文献:"/"**参考文献：**"/"### 参考文献"等写法)
+        m = re.search(r"\n\s*[#*\s]*参考文献", answer)
+        if not m:
+            return answer
+        body = answer[: m.start()]
+        body = re.sub(
+            r"\[(\d{1,2})\]",
+            lambda mm: f"[{remap.get(int(mm.group(1)), int(mm.group(1)))}]",
+            body,
+        )
+        # 合并后相邻的重复引用编号去重: [1][1] -> [1], [1][2][1] -> [1][2]
+        def _dedup_cluster(match: re.Match) -> str:
+            nums = re.findall(r"\d{1,2}", match.group(0))
+            seen: list[str] = []
+            for n in nums:
+                if n not in seen:
+                    seen.append(n)
+            return "".join(f"[{n}]" for n in seen)
+
+        body = re.sub(r"(?:\[\d{1,2}\]){2,}", _dedup_cluster, body)
+        lines = [
+            f"[{i}] {hits[i - 1]['title']}" for i in sorted(first_of_source.values())
+        ]
+        return body + "\n\n参考文献:\n" + "\n".join(lines)
+
     def _llm_client(self):
         if not hasattr(self, "_client"):
             load_dotenv(PROJECT_ROOT / ".env")
@@ -324,7 +363,7 @@ class RAGEngine:
             messages=self._messages(standalone, hits),
         )
         elapsed = time.time() - t0
-        answer = resp.choices[0].message.content
+        answer = self._dedupe_answer_refs(resp.choices[0].message.content, hits)
         return {
             "question": query,
             "standalone_query": standalone,
@@ -364,6 +403,7 @@ class RAGEngine:
             if delta:
                 partial += delta
                 yield partial
+        partial = self._dedupe_answer_refs(partial, hits)
         elapsed = time.time() - t0
         tail = f"\n\n---\n生成耗时 {elapsed:.1f}s | 引用来源见上方参考文献列表"
         if standalone != query:

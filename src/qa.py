@@ -120,8 +120,10 @@ class RAGEngine:
                 embeddings=embeddings.tolist(),
                 documents=[r["text"] for r in batch],
                 metadatas=[
-                    {"source": r["source"], "title": r["title"],
-                     "lib": r.get("lib", "core")}
+                    {k: v for k, v in
+                     {"source": r["source"], "title": r["title"],
+                      "lib": r.get("lib", "core"), "page": r.get("page")}.items()
+                     if v is not None}
                     for r in batch
                 ],
             )
@@ -150,7 +152,8 @@ class RAGEngine:
         ):
             hits.append(
                 {"id": doc_id, "text": doc, "source": meta["source"],
-                 "title": meta["title"], "similarity": 1 - dist}
+                 "title": meta["title"], "page": meta.get("page"),
+                 "similarity": 1 - dist}
             )
         return hits
 
@@ -242,7 +245,8 @@ class RAGEngine:
     def build_prompt(self, query: str, hits: list[dict]) -> str:
         parts = ["以下是与问题相关的文献片段:\n"]
         for i, h in enumerate(hits, 1):
-            parts.append(f"[{i}] (来源: {h['title']})\n{h['text']}\n")
+            page = f", 第{h['page']}页" if h.get("page") else ""
+            parts.append(f"[{i}] (来源: {h['title']}{page})\n{h['text']}\n")
         parts.append(f"\n问题: {query}")
         return "\n".join(parts)
 
@@ -326,7 +330,8 @@ class RAGEngine:
             "standalone_query": standalone,
             "answer": answer,
             "references": [
-                {"n": i, "title": h["title"], "source": h["source"]}
+                {"n": i, "title": h["title"], "source": h["source"],
+                 "page": h.get("page")}
                 for i, h in enumerate(hits, 1)
             ],
             "elapsed_s": round(elapsed, 1),

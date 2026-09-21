@@ -12,16 +12,24 @@
 import os
 import shutil
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
-from qa import RAGEngine  # noqa: E402
-from citations import export_citations  # noqa: E402  (须最先导入: 设置 HF 离线环境变量)
+from qa import RAGEngine  # noqa: E402  (须最先导入: 设置 HF 离线环境变量)
+from citations import export_citations  # noqa: E402
+from materials_db import load_materials  # noqa: E402
 from ingest import load_titles  # noqa: E402
 from user_upload import UPLOAD_DIR, list_uploads, process_pdf, save_and_register  # noqa: E402
+from auto_extract import (  # noqa: E402
+    USER_CURATED_HEADER, add_pending, confirm_pending, extract_from_text,
+    load_pending, save_pending,
+)
+from arxiv_watch import fetch as arxiv_fetch, load_entries as arxiv_load  # noqa: E402
 
 import gradio as gr  # noqa: E402
 from langchain_text_splitters import RecursiveCharacterTextSplitter  # noqa: E402
@@ -58,9 +66,10 @@ def format_hits(hits: list | None) -> str:
     parts = []
     for i, h in enumerate(hits, 1):
         text = h["text"][:350] + ("……" if len(h["text"]) > 350 else "")
+        page = f" | 第 {h['page']} 页" if h.get("page") else ""
         parts.append(
             f"**[{i}]** 《{h['title']}》  \n"
-            f"来源: `{h['source']}` | 相关度: {h['similarity']:.2f}\n\n"
+            f"来源: `{h['source']}`{page} | 相关度: {h['similarity']:.2f}\n\n"
             f"> {text}\n"
         )
     return "\n---\n".join(parts)
@@ -79,6 +88,7 @@ def respond(message: str, history: list):
         for partial in engine.ask_stream(message, history=past_turns):
             history[-1]["content"] = partial
             yield "", history, "🔍 检索与生成中……"
+        engine.last_question = {"question": message, "answer": history[-1]["content"]}
         yield "", history, format_hits(getattr(engine, "last_hits", None))
     except SystemExit as e:
         history[-1]["content"] = f"系统配置错误: {e}"
@@ -96,6 +106,60 @@ def do_export_citations(fmt: str):
         return gr.update(visible=True, value="请先提问, 再导出本次回答用到的参考文献")
     sources = [h["source"] for h in hits]
     return gr.update(visible=True, value=export_citations(sources, fmt))
+
+
+# ---------- 答案导出 ----------
+
+def do_export_answer():
+    """把最近一次问答(问题/答案/依据片段/参考文献)打包为 Markdown 文件下载。"""
+    hits = getattr(engine, "last_hits", None)
+    last_q = getattr(engine, "last_question", None)
+    if not last_q:
+        return gr.update(visible=False)
+    md = [f"# 问答记录\n\n**问题**: {last_q['question']}\n",
+          f"**时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}\n", "## 回答\n", last_q["answer"], ""]
+    if hits:
+        md.append("\n## 依据的文献片段\n")
+        for i, h in enumerate(hits, 1):
+            page = f", 第{h['page']}页" if h.get("page") else ""
+            md.append(f"**[{i}]** 《{h['title']}》(来源: {h['source']}{page})\n")
+            md.append(f"> {h['text'][:400]}\n")
+        md.append("\n## 参考文献 (GB/T 7714)\n")
+        md.append(export_citations([h["source"] for h in hits], "gbt7714"))
+    out = Path(tempfile.gettempdir()) / f"问答记录_{int(time.time())}.md"
+    out.write_text("\n".join(md), encoding="utf-8")
+    return gr.update(visible=True, value=str(out))
+
+
+# ---------- 性能排行榜 ----------
+
+_CATEGORY_LABELS = {
+    "全部": None, "氧卤化物": "oxyhalide", "氯化物": "chloride",
+    "溴化物": "bromide", "氟化物": "fluoride", "混合卤素": "mixed",
+}
+
+
+def leaderboard(category_label: str):
+    cat = _CATEGORY_LABELS.get(category_label)
+    mats = [
+        m for m in load_materials()
+        if m["ionic_val"] is not None and (cat is None or m["category"] == cat)
+    ]
+    mats.sort(key=lambda m: m["ionic_val"], reverse=True)
+    top = mats[:15]
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "材料": [m["formula"] + (f"（{m['note']}）" if m["note"] else "") for m in top],
+            "室温离子电导率 (mS cm⁻¹)": [m["ionic_val"] for m in top],
+        }
+    )
+    table = [
+        [m["formula"], m["ionic"], m["ea"], m["electronic"], m["esw"]]
+        for m in top
+    ]
+    return df, table
 
 def library_stats() -> str:
     total = engine.count_chunks()
@@ -160,14 +224,111 @@ def upload_pdf(file, upload_pwd, progress=gr.Progress()):
         progress(0.7, desc="向量嵌入与入库")
         engine.add_documents(result["records"])
         save_and_register(dest, len(result["records"]), result["title"])
+
+        # 知识库自生长: LLM 从新论文中抽取材料性能数据, 进入待确认队列
+        progress(0.85, desc="LLM抽取性能数据")
+        extract_note = ""
+        try:
+            full_text = "\n".join(r["text"] for r in result["records"])
+            new_rows = extract_from_text(full_text, engine._llm_client())
+            if new_rows:
+                n = add_pending(new_rows, src.name)
+                extract_note = (
+                    f"\n\n🌱 另从本文抽取到 **{n} 条**材料性能数据, "
+                    f"请在下方「待确认数据」中核对后确认入库"
+                )
+        except Exception:
+            extract_note = "\n\n(性能数据自动抽取失败, 不影响文献入库)"
     except Exception as e:
         yield f"❌ 处理失败: {e}", *refresh_library()
         return
 
     yield (
         f"✅ **{result['title']}** 已入库: {result['n_pages']} 页 → "
-        f"{len(result['records'])} 个文本块, 现在起可被检索",
+        f"{len(result['records'])} 个文本块, 现在起可被检索" + extract_note,
         *refresh_library(),
+    )
+
+
+# ---------- 待确认数据(知识库自生长) ----------
+
+def pending_table() -> list[list[str]]:
+    return [[p["row"], p["source_file"], p["extracted_at"]] for p in load_pending()]
+
+
+def do_confirm_pending():
+    rows = confirm_pending()
+    if not rows:
+        return "暂无待确认数据", pending_table(), library_stats(), uploads_table()
+    # 以人工表相同格式向量化入库(与 ingest.py 的按行切分一致)
+    header = USER_CURATED_HEADER.splitlines()[0]
+    ts = int(time.time())
+    records = [
+        {
+            "id": f"usercur-{ts}#{i}",
+            "text": f"{header}\n{row}",
+            "source": "curated/user_contributed.txt",
+            "title": USER_CURATED_HEADER.splitlines()[0][:80],
+        }
+        for i, row in enumerate(rows)
+    ]
+    engine.add_documents(records)
+    msg = f"✅ 已确认 **{len(rows)} 条**性能数据入库, 现在起参与检索/筛选/对比"
+    return msg, pending_table(), library_stats(), uploads_table()
+
+
+def do_clear_pending():
+    save_pending([])
+    return "已清空待确认队列", pending_table(), library_stats(), uploads_table()
+
+
+# ---------- 新文献追踪 ----------
+
+def arxiv_panel():
+    data = arxiv_load()
+    rows = [[e["published"], e["title"], e["arxiv_id"]] for e in data["entries"]]
+    label = f"最近更新: {data['fetched_at'] or '从未'} (近 {data['days']} 天, 每周自动追踪)"
+    return rows, label
+
+
+def do_arxiv_refresh():
+    try:
+        entries = arxiv_fetch(30)
+        msg = f"✅ 已刷新: 近30天新文献 {len(entries)} 篇"
+    except Exception as e:
+        msg = f"⚠️ 刷新失败(arXiv限流, {str(e)[:60]}), 展示缓存数据"
+    return msg, *arxiv_panel()
+
+
+def do_arxiv_ingest(progress=gr.Progress()):
+    import urllib.request
+
+    data = arxiv_load()
+    entries = data["entries"]
+    if not entries:
+        return "没有可入库的条目", *arxiv_panel(), library_stats(), uploads_table()
+    UPLOAD_DIR.mkdir(exist_ok=True)
+    ok = 0
+    for i, e in enumerate(entries):
+        progress((i + 1) / (len(entries) + 1), desc=f"下载入库 {e['arxiv_id']}")
+        try:
+            dest = UPLOAD_DIR / f"arXiv_{e['arxiv_id'].replace('/', '_')}.pdf"
+            if not dest.exists():
+                req = urllib.request.Request(
+                    e["pdf_url"], headers={"User-Agent": "Mozilla/5.0"}
+                )
+                dest.write_bytes(urllib.request.urlopen(req, timeout=90).read())
+            result = process_pdf(dest, splitter)
+            if result["records"]:
+                engine.add_documents(result["records"])
+                save_and_register(dest, len(result["records"]), result["title"])
+                ok += 1
+            time.sleep(2)
+        except Exception:
+            continue
+    return (
+        f"✅ 已下载入库 {ok}/{len(entries)} 篇新文献, 现在起可被检索",
+        *arxiv_panel(), library_stats(), uploads_table(),
     )
 
 
@@ -291,7 +452,7 @@ GUIDE_MD = """
 - 技术支持：遇到异常（长时间无响应/报错）请联系项目组，附上你的问题截图
 """
 
-with gr.Blocks(title="卤化物固态电解质问答系统", theme=theme, css=CSS) as demo:
+with gr.Blocks(title="卤化物固态电解质问答系统") as demo:
     gr.Markdown(
         "# ⚗️ 卤化物固态电解质知识问答系统\n"
         "基于 RAG 架构的领域问答助手 — 答案仅依据文献库内容, 带 [编号] 引用, 未收录的数据会明确告知。",
@@ -320,6 +481,9 @@ with gr.Blocks(title="卤化物固态电解质问答系统", theme=theme, css=CS
                         )
                         cite_btn = gr.Button("📋 导出本回答的参考文献", scale=2)
                     cite_out = gr.Textbox(label="参考文献 (可直接复制)", lines=4, visible=False)
+                    with gr.Row():
+                        dl_btn = gr.Button("⬇️ 下载本次问答记录 (Markdown)", scale=2)
+                    dl_file = gr.File(label="问答记录文件", visible=False, interactive=False)
 
                 # 右侧: 文献库 + 上传
                 with gr.Column(scale=2):
@@ -347,6 +511,40 @@ with gr.Blocks(title="卤化物固态电解质问答系统", theme=theme, css=CS
                             interactive=False, wrap=True,
                         )
                     refresh_btn = gr.Button("🔄 刷新文献库", size="sm")
+                    with gr.Accordion("🌱 待确认数据 (新论文自动抽取)", open=True):
+                        pending_df = gr.Dataframe(
+                            headers=["性能数据行", "来源文件", "抽取时间"], col_count=3,
+                            interactive=False, wrap=True,
+                        )
+                        with gr.Row():
+                            confirm_btn = gr.Button("✅ 确认入库", variant="primary", size="sm")
+                            clear_btn = gr.Button("🗑 清空", size="sm")
+                        pending_status = gr.Markdown()
+                    with gr.Accordion("📰 新文献追踪 (arXiv 每周自动更新)", open=False):
+                        arxiv_df = gr.Dataframe(
+                            headers=["日期", "标题", "arXiv ID"], col_count=3,
+                            interactive=False, wrap=True,
+                        )
+                        arxiv_label = gr.Markdown()
+                        with gr.Row():
+                            arxiv_refresh_btn = gr.Button("🔄 立即刷新", size="sm")
+                            arxiv_ingest_btn = gr.Button("⬇️ 全部下载入库", variant="secondary", size="sm")
+                        arxiv_status = gr.Markdown()
+
+        with gr.Tab("🏆 性能排行"):
+            gr.Markdown("核心性能数据表收录材料的室温离子电导率排行 (数据: 人工校准性能表)")
+            lb_filter = gr.Dropdown(
+                choices=list(_CATEGORY_LABELS.keys()), value="全部",
+                label="按材料类别筛选",
+            )
+            lb_plot = gr.BarPlot(
+                x="材料", y="室温离子电导率 (mS cm⁻¹)", sort="-y",
+                x_label_angle=-45, height=480, title="室温离子电导率 Top 15",
+            )
+            lb_table = gr.Dataframe(
+                headers=["材料", "离子电导率 (mS cm-1)", "活化能 (eV)", "电子电导率 (S cm-1)", "ESW"],
+                interactive=False, wrap=True, label="详细数据",
+            )
 
         with gr.Tab("📘 使用指南"):
             gr.Markdown(GUIDE_MD)
@@ -355,12 +553,27 @@ with gr.Blocks(title="卤化物固态电解质问答系统", theme=theme, css=CS
     send_btn.click(respond, [msg, chatbot], [msg, chatbot, chunks_md])
     msg.submit(respond, [msg, chatbot], [msg, chatbot, chunks_md])
     cite_btn.click(do_export_citations, cite_fmt, cite_out)
+    dl_btn.click(do_export_answer, None, dl_file)
+    lb_filter.change(leaderboard, lb_filter, [lb_plot, lb_table])
+    demo.load(leaderboard, lb_filter, [lb_plot, lb_table], queue=False)
     upload_btn.click(
         upload_pdf, [file_input, upload_pwd],
         [upload_status, stats_md, core_df, uploads_df],
     )
     refresh_btn.click(refresh_library, None, [stats_md, core_df, uploads_df])
     demo.load(refresh_library, None, [stats_md, core_df, uploads_df])
+    demo.load(lambda: pending_table(), None, pending_df, queue=False)
+    confirm_btn.click(
+        do_confirm_pending, None, [pending_status, pending_df, stats_md, uploads_df]
+    )
+    clear_btn.click(
+        do_clear_pending, None, [pending_status, pending_df, stats_md, uploads_df]
+    )
+    arxiv_refresh_btn.click(do_arxiv_refresh, None, [arxiv_status, arxiv_df, arxiv_label])
+    arxiv_ingest_btn.click(
+        do_arxiv_ingest, None, [arxiv_status, arxiv_df, arxiv_label, stats_md, uploads_df]
+    )
+    demo.load(lambda: arxiv_panel(), None, [arxiv_df, arxiv_label], queue=False)
 
 if __name__ == "__main__":
     server = "0.0.0.0" if SHARE_LAN else "127.0.0.1"
@@ -369,4 +582,4 @@ if __name__ == "__main__":
           + (" (局域网模式, 同学可通过你的IP访问)" if SHARE_LAN else " (本地模式)"))
     if auth:
         print(f"访问口令已开启: 用户名 {ACCESS_USER}")
-    demo.launch(server_name=server, server_port=PORT, auth=auth)
+    demo.launch(server_name=server, server_port=PORT, auth=auth, theme=theme, css=CSS)

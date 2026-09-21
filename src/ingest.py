@@ -62,8 +62,8 @@ def extract_pages(pdf_path: Path, engine: str = "text") -> list[str]:
     return pages
 
 
-def clean_pages(pages: list[str]) -> str:
-    """去水印/页眉页脚/页码, 并把同段落的断行合并。"""
+def _clean_page_lines(pages: list[str]) -> list[str]:
+    """逐页去水印/页眉页脚/页码(保留页结构)。"""
     pages = [p.translate(_ODD_SPACES) for p in pages]
     # 统计跨页重复行(页眉页脚特征): 出现在超过 30% 页面且较短的行
     line_page_count: dict[str, int] = {}
@@ -92,14 +92,25 @@ def clean_pages(pages: list[str]) -> str:
                 continue
             kept.append(s)
         cleaned_pages.append("\n".join(kept))
+    return cleaned_pages
 
-    full = "\n\n".join(cleaned_pages)
-    # 段内断行合并: 单行换行(前后非空行)合并为空格; 保留空行作为段落边界
-    full = re.sub(r"(?<=\S)\n(?=\S)", " ", full)
-    # 连字符断词: "conduct-\nivity" 已在上面合并为 "conduct- ivity" 的情况较少见, 不强行处理
-    full = re.sub(r"[ \t]+", " ", full)
-    full = re.sub(r"\n{3,}", "\n\n", full)
-    return _strip_watermark_fragments(full)
+
+def _merge_lines(text: str) -> str:
+    """段内断行合并 + 空白规整 + 水印残片剔除(页内处理)。"""
+    text = re.sub(r"(?<=\S)\n(?=\S)", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return _strip_watermark_fragments(text)
+
+
+def clean_pages_paged(pages: list[str]) -> list[str]:
+    """清洗并按页返回文本(供分块记录页码)。"""
+    return [_merge_lines(p) for p in _clean_page_lines(pages)]
+
+
+def clean_pages(pages: list[str]) -> str:
+    """去水印/页眉页脚/页码, 并把同段落的断行合并(全文为一个字符串)。"""
+    return _merge_lines("\n\n".join(_clean_page_lines(pages)))
 
 
 # 出版商在 PDF 中加入的下载水印常被双栏排版打碎、甚至嵌入零宽空格,
@@ -176,19 +187,25 @@ def main() -> None:
     with open(out_path, "w", encoding="utf-8") as out:
         for pdf in pdfs:
             pages = extract_pages(pdf, engine=args.engine)
-            text = normalize_formulas(clean_pages(pages))
-            chunks = splitter.split_text(text)
             title = titles.get(pdf.name, pdf.stem)
-            for i, chunk in enumerate(chunks):
-                record = {
-                    "id": f"{pdf.stem}#{i}",
-                    "text": chunk,
-                    "source": pdf.name,
-                    "title": title,
-                }
-                out.write(json.dumps(record, ensure_ascii=False) + "\n")
-            total_chunks += len(chunks)
-            print(f"{pdf.name}: {len(pages)} 页 -> {len(chunks)} 块")
+            n_chunks_doc = 0
+            # 逐页清洗与分块, 每个块记录页码(引用可定位到页)
+            for pno, page_text in enumerate(clean_pages_paged(pages), 1):
+                page_text = normalize_formulas(page_text)
+                if len(page_text.strip()) < 30:
+                    continue
+                for i, chunk in enumerate(splitter.split_text(page_text)):
+                    record = {
+                        "id": f"{pdf.stem}#p{pno}-{i}",
+                        "text": chunk,
+                        "source": pdf.name,
+                        "title": title,
+                        "page": pno,
+                    }
+                    out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    n_chunks_doc += 1
+            total_chunks += n_chunks_doc
+            print(f"{pdf.name}: {len(pages)} 页 -> {n_chunks_doc} 块")
 
         # 人工整理的结构化文档(如综述表格), 弥补双栏PDF表格抽取错乱的问题。
         # 按行切分(一行一材料一块)并前缀表头: 保证"某材料的某指标"类精确查询

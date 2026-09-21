@@ -11,7 +11,7 @@ from pathlib import Path
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from ingest import clean_pages, extract_pages, normalize_formulas, _ODD_SPACES
+from ingest import clean_pages_paged, extract_pages, normalize_formulas, _ODD_SPACES
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = PROJECT_ROOT / "uploads"
@@ -48,22 +48,27 @@ def _guess_title(text: str, fallback: str) -> str:
 
 
 def process_pdf(pdf_path: Path, splitter: RecursiveCharacterTextSplitter) -> dict:
-    """处理单个PDF, 返回 {title, chunks(含元数据), n_pages}。"""
+    """处理单个PDF, 返回 {title, records(含页码元数据), n_pages}。"""
     pages = extract_pages(pdf_path)
-    text = normalize_formulas(clean_pages(pages))
-    title = _guess_title(text, pdf_path.stem)
-    chunks = splitter.split_text(text)
+    page_texts = [normalize_formulas(t) for t in clean_pages_paged(pages)]
+    full_text = "\n\n".join(page_texts)
+    title = _guess_title(full_text, pdf_path.stem)
     doc_id = f"user-{int(time.time())}-{pdf_path.stem[:30]}"
-    records = [
-        {
-            "id": f"{doc_id}#{i}",
-            "text": chunk,
-            "source": f"user/{pdf_path.name}",
-            "title": title,
-            "lib": "user",
-        }
-        for i, chunk in enumerate(chunks)
-    ]
+    records = []
+    for pno, ptext in enumerate(page_texts, 1):
+        if len(ptext.strip()) < 30:
+            continue
+        for i, chunk in enumerate(splitter.split_text(ptext)):
+            records.append(
+                {
+                    "id": f"{doc_id}#p{pno}-{i}",
+                    "text": chunk,
+                    "source": f"user/{pdf_path.name}",
+                    "title": title,
+                    "lib": "user",
+                    "page": pno,
+                }
+            )
     return {"title": title, "records": records, "n_pages": len(pages)}
 
 

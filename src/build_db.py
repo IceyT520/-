@@ -68,7 +68,12 @@ def main() -> None:
             ids=[r["id"] for r in batch],
             embeddings=embeddings.tolist(),
             documents=[r["text"] for r in batch],
-            metadatas=[{"source": r["source"], "title": r["title"]} for r in batch],
+            metadatas=[
+                {k: v for k, v in
+                 {"source": r["source"], "title": r["title"], "page": r.get("page")}.items()
+                 if v is not None}
+                for r in batch
+            ],
         )
         print(f"已写入 {min(start + args.batch_size, len(records))}/{len(records)}")
 

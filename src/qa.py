@@ -16,9 +16,10 @@ import time
 from pathlib import Path
 
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-# 嵌入模型已缓存时离线加载, 避免启动时向 huggingface.co 发送检查请求的长重试
-if (Path.home() / ".cache" / "huggingface" / "hub"
-        / "models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2").exists():
+# 嵌入/精排模型均已缓存时离线加载, 避免启动时向 huggingface.co 发送检查请求的长重试
+_HF_HUB = Path.home() / ".cache" / "huggingface" / "hub"
+if (_HF_HUB / "models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2").exists() \
+        and (_HF_HUB / "models--BAAI--bge-reranker-base").exists():
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 from dotenv import load_dotenv  # noqa: E402
@@ -28,6 +29,12 @@ from build_db import COLLECTION_NAME, EMBEDDING_MODEL  # noqa: E402
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path("data/chroma_db")  # 相对路径, 见 RAGEngine 中的说明
 
+
+def curated_sources() -> list[str]:
+    """data/curated/ 下所有人工整理文档的 source 标识(与 ingest.py 一致)。"""
+    d = PROJECT_ROOT / "data" / "curated"
+    return [f"curated/{p.name}" for p in sorted(d.glob("*.txt"))] if d.exists() else []
+
 SYSTEM_PROMPT = """你是卤化物固态电解质领域的科研问答助手。请严格遵守以下规则:
 1. 仅依据提供的文献片段回答, 不得使用片段之外的知识;
 2. 若片段中没有回答问题所需的信息, 请明确说明"未在文献中找到该数据", 不得编造数值或结论;
@@ -35,6 +42,12 @@ SYSTEM_PROMPT = """你是卤化物固态电解质领域的科研问答助手。�
 4. 答案末尾列出参考文献列表, 格式: [编号] 论文标题;
 5. 化学式统一写作 ASCII 数字形式 (如 Li3YCl6), 数值保留单位;
 6. 用中文回答。"""
+
+REWRITE_PROMPT = """你是查询改写助手。根据对话历史, 把用户的最新问题改写为一个独立、完整、无歧义的问题:
+- 补全省略的主语和指代(如"它"、"这个材料"、"那活化能呢");
+- 保留原问题中的化学式和关键术语;
+- 若原问题本身已独立完整, 原样输出;
+- 只输出改写后的问题本身, 不要任何解释。"""
 
 # 与 ingest.py 一致的化学式归一化, 保证查询与语料格式匹配
 _SUB_SUPER = str.maketrans(
@@ -110,7 +123,7 @@ class RAGEngine:
             return self.collection.count()
         return len(self.collection.get(where={"lib": lib}, include=[])["ids"])
 
-    def _vector_rank(self, q_emb: list, n: int, where_document=None) -> list[dict]:
+    def _vector_rank(self, q_emb: list, n: int, where_document=None, where=None) -> list[dict]:
         kwargs = dict(
             query_embeddings=q_emb,
             n_results=n,
@@ -118,6 +131,8 @@ class RAGEngine:
         )
         if where_document:
             kwargs["where_document"] = where_document
+        if where:
+            kwargs["where"] = where
         result = self.collection.query(**kwargs)
         hits = []
         for doc_id, doc, meta, dist in zip(
@@ -147,6 +162,18 @@ class RAGEngine:
             rank_lists.append(
                 (2.0, self._vector_rank(q_emb, 10, where_document={"$contains": formula}))
             )
+            # 结构化数据分支: 人工校准数据表是人工核验过的事实源,
+            # 对"某材料某指标"类查询给最高投票权重, 确保其进入精排候选池
+            rank_lists.append(
+                (
+                    2.5,
+                    self._vector_rank(
+                        q_emb, 3,
+                        where_document={"$contains": formula},
+                        where={"source": {"$in": curated_sources()}},
+                    ),
+                )
+            )
 
         rrf_score: dict[str, float] = {}
         best: dict[str, dict] = {}
@@ -156,7 +183,52 @@ class RAGEngine:
                 if h["id"] not in best or h["similarity"] > best[h["id"]]["similarity"]:
                     best[h["id"]] = h
         ordered = sorted(rrf_score, key=lambda i: rrf_score[i], reverse=True)
-        return [best[i] for i in ordered[:k]]
+        candidates = [best[i] for i in ordered[: max(k * 3, 12)]]
+
+        # 精排结果作为"第三位投票者"再次RRF融合, 而非直接覆盖:
+        # 通用精排模型偏爱关键词密集的文本(如数据表), 直接覆盖会压制
+        # 化学式精确匹配与向量语义两个领域信号的排序结果
+        reranked = self._rerank(query, candidates)
+        final_score: dict[str, float] = {}
+        for rank, h in enumerate(reranked):
+            final_score[h["id"]] = 1.5 / (60 + rank + 1)
+        for weight, hits in rank_lists:
+            for rank, h in enumerate(hits):
+                if h["id"] in final_score:
+                    final_score[h["id"]] += weight / (60 + rank + 1)
+        ordered = sorted(final_score, key=lambda i: final_score[i], reverse=True)
+        # 同源多样性约束: 每个来源最多占2席, 防止关键词密集的单一来源
+        # (如人工数据表)挤占全部席位, 保证答案引用的来源多样性
+        picked: list[dict] = []
+        per_source: dict[str, int] = {}
+        for i in ordered:
+            src = best[i]["source"]
+            if per_source.get(src, 0) >= 2:
+                continue
+            per_source[src] = per_source.get(src, 0) + 1
+            picked.append(best[i])
+            if len(picked) >= k:
+                break
+        return picked
+
+    @property
+    def reranker(self):
+        """交叉编码精排模型(懒加载)。对粗排结果按 (问题, 文本块) 对重新打分,
+        显著提升复杂问法的排序质量, 是主流RAG产品的标配环节。"""
+        if not hasattr(self, "_reranker"):
+            from sentence_transformers import CrossEncoder
+
+            self._reranker = CrossEncoder("BAAI/bge-reranker-base")
+        return self._reranker
+
+    def _rerank(self, query: str, candidates: list[dict]) -> list[dict]:
+        if not candidates:
+            return candidates
+        pairs = [[query, c["text"]] for c in candidates]
+        scores = self.reranker.predict(pairs)
+        for c, s in zip(candidates, scores):
+            c["rerank_score"] = float(s)
+        return sorted(candidates, key=lambda c: c["rerank_score"], reverse=True)
 
     def build_prompt(self, query: str, hits: list[dict]) -> str:
         parts = ["以下是与问题相关的文献片段:\n"]
@@ -184,19 +256,55 @@ class RAGEngine:
             {"role": "user", "content": self.build_prompt(query, hits)},
         ]
 
-    def ask(self, query: str) -> dict:
-        hits = self.retrieve(query)
+    def rewrite_query(self, query: str, history: list | None) -> str:
+        """多轮对话: 把指代性追问改写为独立问题(无历史则原样返回)。"""
+        if not history:
+            return query
+        recent = [
+            {"role": h["role"], "content": str(h["content"])[:300]}
+            for h in history[-4:]
+            if h.get("role") in ("user", "assistant")
+        ]
+        if not recent:
+            return query
+        resp = self._llm_client().chat.completions.create(
+            model="deepseek-chat",
+            temperature=0,
+            max_tokens=200,
+            messages=[{"role": "system", "content": REWRITE_PROMPT}]
+            + recent
+            + [{"role": "user", "content": query}],
+        )
+        rewritten = resp.choices[0].message.content.strip()
+        return rewritten or query
+
+    def ask(self, query: str, history: list | None = None) -> dict:
+        standalone = self.rewrite_query(query, history)
+        from materials_db import try_chem_query, try_compare_query
+
+        chem = try_compare_query(standalone) or try_chem_query(standalone)
+        if chem is not None:
+            self.last_hits = []
+            return {
+                "question": query,
+                "standalone_query": standalone,
+                "answer": chem,
+                "references": [],
+                "elapsed_s": 0,
+            }
+        hits = self.retrieve(standalone)
         client = self._llm_client()
         t0 = time.time()
         resp = client.chat.completions.create(
             model="deepseek-chat",
             temperature=0.2,
-            messages=self._messages(query, hits),
+            messages=self._messages(standalone, hits),
         )
         elapsed = time.time() - t0
         answer = resp.choices[0].message.content
         return {
             "question": query,
+            "standalone_query": standalone,
             "answer": answer,
             "references": [
                 {"n": i, "title": h["title"], "source": h["source"]}
@@ -205,15 +313,25 @@ class RAGEngine:
             "elapsed_s": round(elapsed, 1),
         }
 
-    def ask_stream(self, query: str):
-        """流式生成, 供网页界面使用。逐段产出答案文本, 最后产出耗时标记。"""
-        hits = self.retrieve(query)
+    def ask_stream(self, query: str, history: list | None = None):
+        """流式生成, 供网页界面使用。逐段产出答案文本, 最后产出耗时标记。
+        检索结果存入 self.last_hits, 供界面展示引用片段。"""
+        standalone = self.rewrite_query(query, history)
+        from materials_db import try_chem_query, try_compare_query
+
+        chem = try_compare_query(standalone) or try_chem_query(standalone)
+        if chem is not None:
+            self.last_hits = []
+            yield chem + "\n\n---\n(本回答由化学感知查询直接生成, 数据来自人工校准性能表)"
+            return
+        hits = self.retrieve(standalone)
+        self.last_hits = hits
         client = self._llm_client()
         t0 = time.time()
         stream = client.chat.completions.create(
             model="deepseek-chat",
             temperature=0.2,
-            messages=self._messages(query, hits),
+            messages=self._messages(standalone, hits),
             stream=True,
         )
         partial = ""
@@ -223,7 +341,10 @@ class RAGEngine:
                 partial += delta
                 yield partial
         elapsed = time.time() - t0
-        yield f"{partial}\n\n---\n生成耗时 {elapsed:.1f}s | 引用来源见上方参考文献列表"
+        tail = f"\n\n---\n生成耗时 {elapsed:.1f}s | 引用来源见上方参考文献列表"
+        if standalone != query:
+            tail += f"\n(追问已改写为: {standalone})"
+        yield partial + tail
 
 
 def main() -> None:

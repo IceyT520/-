@@ -44,7 +44,16 @@ def normalize_formulas(text: str) -> str:
     return text.translate(_SUB_SUPER)
 
 
-def extract_pages(pdf_path: Path) -> list[str]:
+def extract_pages(pdf_path: Path, engine: str = "text") -> list[str]:
+    if engine == "md":
+        import pymupdf4llm
+
+        doc = fitz.open(pdf_path)
+        n = len(doc)
+        doc.close()
+        return [
+            pymupdf4llm.to_markdown(str(pdf_path), pages=[i]) for i in range(n)
+        ]
     doc = fitz.open(pdf_path)
     pages = []
     for page in doc:
@@ -142,6 +151,10 @@ def main() -> None:
     parser.add_argument("--out", default=str(PROJECT_ROOT / "data" / "chunks.jsonl"))
     parser.add_argument("--chunk-size", type=int, default=600)
     parser.add_argument("--chunk-overlap", type=int, default=120)
+    parser.add_argument(
+        "--engine", choices=["text", "md"], default="text",
+        help="text=PyMuPDF纯文本(默认, 快); md=pymupdf4llm转Markdown(慢, 表格/版面更好)",
+    )
     args = parser.parse_args()
 
     pdf_dir = Path(args.pdf_dir)
@@ -162,7 +175,7 @@ def main() -> None:
     total_chunks = 0
     with open(out_path, "w", encoding="utf-8") as out:
         for pdf in pdfs:
-            pages = extract_pages(pdf)
+            pages = extract_pages(pdf, engine=args.engine)
             text = normalize_formulas(clean_pages(pages))
             chunks = splitter.split_text(text)
             title = titles.get(pdf.name, pdf.stem)
@@ -177,24 +190,31 @@ def main() -> None:
             total_chunks += len(chunks)
             print(f"{pdf.name}: {len(pages)} 页 -> {len(chunks)} 块")
 
-        # 人工整理的结构化文档(如综述表格), 弥补双栏PDF表格抽取错乱的问题
+        # 人工整理的结构化文档(如综述表格), 弥补双栏PDF表格抽取错乱的问题。
+        # 按行切分(一行一材料一块)并前缀表头: 保证"某材料的某指标"类精确查询
+        # 能命中独立行, 而不是被同块内其他材料稀释向量信号
         curated_dir = PROJECT_ROOT / "data" / "curated"
         for txt in sorted(curated_dir.glob("*.txt")):
             text = normalize_formulas(
                 txt.read_text(encoding="utf-8").translate(_ODD_SPACES)
             )
-            title = text.splitlines()[0][:80]
-            chunks = splitter.split_text(text)
-            for i, chunk in enumerate(chunks):
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            title = lines[0][:80]
+            header = "\n".join(lines[:2])
+            n = 0
+            for i, line in enumerate(lines[2:], 0):
+                if line.startswith("注:") or len(line) < 10:
+                    continue
                 record = {
                     "id": f"curated-{txt.stem}#{i}",
-                    "text": chunk,
+                    "text": f"{header}\n{line}",
                     "source": f"curated/{txt.name}",
                     "title": title,
                 }
                 out.write(json.dumps(record, ensure_ascii=False) + "\n")
-            total_chunks += len(chunks)
-            print(f"curated/{txt.name}: -> {len(chunks)} 块")
+                n += 1
+            total_chunks += n
+            print(f"curated/{txt.name}: -> {n} 块(按行)")
 
     print(f"\n共处理 {len(pdfs)} 篇文献, 生成 {total_chunks} 个文本块 -> {out_path}")
 

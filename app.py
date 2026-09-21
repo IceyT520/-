@@ -18,7 +18,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
-from qa import RAGEngine  # noqa: E402  (须最先导入: 设置 HF 离线环境变量)
+from qa import RAGEngine  # noqa: E402
+from citations import export_citations  # noqa: E402  (须最先导入: 设置 HF 离线环境变量)
 from ingest import load_titles  # noqa: E402
 from user_upload import UPLOAD_DIR, list_uploads, process_pdf, save_and_register  # noqa: E402
 
@@ -50,27 +51,51 @@ EXAMPLES = [
 
 # ---------- 聊天 ----------
 
+def format_hits(hits: list | None) -> str:
+    """把检索到的文献片段渲染为可核验的 Markdown。"""
+    if not hits:
+        return "*暂无*"
+    parts = []
+    for i, h in enumerate(hits, 1):
+        text = h["text"][:350] + ("……" if len(h["text"]) > 350 else "")
+        parts.append(
+            f"**[{i}]** 《{h['title']}》  \n"
+            f"来源: `{h['source']}` | 相关度: {h['similarity']:.2f}\n\n"
+            f"> {text}\n"
+        )
+    return "\n---\n".join(parts)
+
+
 def respond(message: str, history: list):
     if not message.strip():
-        yield "", history
+        yield "", history, gr.update()
         return
+    past_turns = list(history)  # 本轮之前的对话, 用于追问改写
     history = history + [
         {"role": "user", "content": message},
         {"role": "assistant", "content": ""},
     ]
     try:
-        for partial in engine.ask_stream(message):
+        for partial in engine.ask_stream(message, history=past_turns):
             history[-1]["content"] = partial
-            yield "", history
+            yield "", history, "🔍 检索与生成中……"
+        yield "", history, format_hits(getattr(engine, "last_hits", None))
     except SystemExit as e:
         history[-1]["content"] = f"系统配置错误: {e}"
-        yield "", history
+        yield "", history, gr.update()
     except Exception as e:
         history[-1]["content"] = f"出错了: {e}\n\n请检查网络连接与 DeepSeek API 额度。"
-        yield "", history
+        yield "", history, gr.update()
 
 
 # ---------- 文献库面板 ----------
+
+def do_export_citations(fmt: str):
+    hits = getattr(engine, "last_hits", None)
+    if not hits:
+        return gr.update(visible=True, value="请先提问, 再导出本次回答用到的参考文献")
+    sources = [h["source"] for h in hits]
+    return gr.update(visible=True, value=export_citations(sources, fmt))
 
 def library_stats() -> str:
     total = engine.count_chunks()
@@ -238,6 +263,15 @@ with gr.Blocks(title="卤化物固态电解质问答系统", theme=theme, css=CS
                         )
                         send_btn = gr.Button("提问", variant="primary", scale=1)
                     gr.Examples(EXAMPLES, msg, label="示例问题 (点击填入)")
+                    with gr.Accordion("📎 本回答依据的文献片段 (点击展开核验)", open=False):
+                        chunks_md = gr.Markdown("*提问后此处显示答案所依据的原文片段*")
+                    with gr.Row():
+                        cite_fmt = gr.Dropdown(
+                            choices=[("GB/T 7714 (国标)", "gbt7714"), ("BibTeX", "bibtex")],
+                            value="gbt7714", label="参考文献导出格式", scale=2,
+                        )
+                        cite_btn = gr.Button("📋 导出本回答的参考文献", scale=2)
+                    cite_out = gr.Textbox(label="参考文献 (可直接复制)", lines=4, visible=False)
 
                 # 右侧: 文献库 + 上传
                 with gr.Column(scale=2):
@@ -270,8 +304,9 @@ with gr.Blocks(title="卤化物固态电解质问答系统", theme=theme, css=CS
             gr.Markdown(GUIDE_MD)
 
     # 事件
-    send_btn.click(respond, [msg, chatbot], [msg, chatbot])
-    msg.submit(respond, [msg, chatbot], [msg, chatbot])
+    send_btn.click(respond, [msg, chatbot], [msg, chatbot, chunks_md])
+    msg.submit(respond, [msg, chatbot], [msg, chatbot, chunks_md])
+    cite_btn.click(do_export_citations, cite_fmt, cite_out)
     upload_btn.click(
         upload_pdf, [file_input, upload_pwd],
         [upload_status, stats_md, core_df, uploads_df],

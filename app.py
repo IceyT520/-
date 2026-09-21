@@ -178,6 +178,33 @@ CSS = """
 .header h1 { margin-bottom: 4px; }
 .header p { color: #666; margin-top: 0; }
 .stats-box { background: #f0f4ff; border-radius: 10px; padding: 10px 14px; }
+
+/* 聊天区中文排版优化 */
+.chatbot, .chatbot .message, .chatbot .message * {
+  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC",
+               "Source Han Sans SC", "Segoe UI", sans-serif !important;
+}
+.chatbot .message {
+  font-size: 15.5px !important;
+  line-height: 1.8 !important;
+}
+.chatbot .message p { margin: 0.35em 0; }
+.chatbot .message ul, .chatbot .message ol { padding-left: 1.4em; }
+/* 回答中的表格(对比表/化学查询结果) */
+.chatbot .message table {
+  border-collapse: collapse; margin: 8px 0; font-size: 14px;
+  display: block; overflow-x: auto; max-width: 100%;
+}
+.chatbot .message th, .chatbot .message td {
+  border: 1px solid #d5dbe7; padding: 5px 10px; white-space: nowrap;
+}
+.chatbot .message th { background: #eef1f8; }
+.chatbot .message tr:nth-child(even) td { background: #f7f8fc; }
+/* 引用块 */
+.chatbot .message blockquote {
+  border-left: 3px solid #b7c3e0; margin: 6px 0;
+  padding: 4px 10px; color: #555; background: #f6f7fb; border-radius: 0 6px 6px 0;
+}
 """
 
 theme = gr.themes.Soft(primary_hue="indigo", neutral_hue="slate")
@@ -276,7 +303,7 @@ with gr.Blocks(title="卤化物固态电解质问答系统", theme=theme, css=CS
             with gr.Row():
                 # 左侧: 聊天
                 with gr.Column(scale=3):
-                    chatbot = gr.Chatbot(height=520, label="问答")
+                    chatbot = gr.Chatbot(height=520, label="问答", elem_classes=["chatbot"])
                     with gr.Row():
                         msg = gr.Textbox(
                             placeholder="请输入问题, 如: Li3HoBr6的离子电导率是多少?",

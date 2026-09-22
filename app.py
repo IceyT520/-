@@ -338,8 +338,11 @@ def do_arxiv_ingest(progress=gr.Progress()):
 # ---------- 界面 ----------
 
 CSS = """
+/* 隐藏 Gradio 框架页脚广告 ("Built with Gradio" / API 链接) */
+footer { display: none !important; }
+
 /* 全局字号与字体: 基准放大, 全站元素按比例缩放 */
-html { font-size: 17.5px !important; }
+html { font-size: 19px !important; }
 .gradio-container {
   font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC",
                "Source Han Sans SC", "Segoe UI", sans-serif !important;
@@ -356,7 +359,7 @@ html { font-size: 17.5px !important; }
                "Source Han Sans SC", "Segoe UI", sans-serif !important;
 }
 .chatbot .message {
-  font-size: 17px !important;
+  font-size: 18px !important;
   line-height: 1.85 !important;
 }
 .chatbot .message p { margin: 0.35em 0; }

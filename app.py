@@ -338,6 +338,13 @@ def do_arxiv_ingest(progress=gr.Progress()):
 # ---------- 界面 ----------
 
 CSS = """
+/* 全局字号与字体: 基准放大, 全站元素按比例缩放 */
+html { font-size: 17.5px !important; }
+.gradio-container {
+  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC",
+               "Source Han Sans SC", "Segoe UI", sans-serif !important;
+}
+
 .header { text-align: center; padding: 12px 0 4px; }
 .header h1 { margin-bottom: 4px; }
 .header p { color: #666; margin-top: 0; }
@@ -349,14 +356,14 @@ CSS = """
                "Source Han Sans SC", "Segoe UI", sans-serif !important;
 }
 .chatbot .message {
-  font-size: 15.5px !important;
-  line-height: 1.8 !important;
+  font-size: 17px !important;
+  line-height: 1.85 !important;
 }
 .chatbot .message p { margin: 0.35em 0; }
 .chatbot .message ul, .chatbot .message ol { padding-left: 1.4em; }
 /* 回答中的表格(对比表/化学查询结果) */
 .chatbot .message table {
-  border-collapse: collapse; margin: 8px 0; font-size: 14px;
+  border-collapse: collapse; margin: 8px 0; font-size: 15px;
   display: block; overflow-x: auto; max-width: 100%;
 }
 .chatbot .message th, .chatbot .message td {
